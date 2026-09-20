@@ -7,6 +7,8 @@ Run with:  python3 -m unittest discover -s tests
 import os
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 import unittest
 
 # Allow importing loopguard from the parent directory
@@ -72,7 +74,7 @@ class TestParseEvent(unittest.TestCase):
 
 
 class TestHashArgs(unittest.TestCase):
-    """_hash_args() must be stable regardless of dict key order."""
+    """loopguard._hash_args() must be stable regardless of dict key order."""
 
     def test_key_order_independent(self):
         h1 = loopguard._hash_args({"b": 2, "a": 1})
@@ -279,3 +281,46 @@ class TestNoArgNormalisationStability(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMultiAgentFormats(unittest.TestCase):
+    """Codex CLI function_call and Gemini CLI toolName/functionCall schemas."""
+
+    def test_codex_function_call_args_string(self):
+        line = '{"type":"function_call","name":"shell","arguments":"{\\"cmd\\": \\"ls\\"}"}'
+        ev = loopguard.parse_event(line)
+        self.assertEqual(ev["tool"], "shell")
+        self.assertEqual(ev["args_hash"], loopguard._hash_args({"cmd": "ls"}))
+
+    def test_codex_function_call_args_dict(self):
+        line = '{"type":"function_call","name":"shell","arguments":{"cmd":"ls"}}'
+        ev = loopguard.parse_event(line)
+        self.assertEqual(ev["tool"], "shell")
+
+    def test_codex_bad_args_string_no_crash(self):
+        line = '{"type":"function_call","name":"shell","arguments":"not json{"}'
+        ev = loopguard.parse_event(line)
+        self.assertEqual(ev["tool"], "shell")
+        self.assertEqual(ev["args_hash"], loopguard._hash_args({}))
+
+    def test_gemini_toolname(self):
+        line = '{"toolName":"run_shell_command","toolArgs":{"command":"ls"}}'
+        ev = loopguard.parse_event(line)
+        self.assertEqual(ev["tool"], "run_shell_command")
+        self.assertEqual(ev["args_hash"], loopguard._hash_args({"command": "ls"}))
+
+    def test_gemini_function_call_nested(self):
+        line = '{"functionCall":{"name":"read_file","args":{"path":"x.py"}}}'
+        ev = loopguard.parse_event(line)
+        self.assertEqual(ev["tool"], "read_file")
+        self.assertEqual(ev["args_hash"], loopguard._hash_args({"path": "x.py"}))
+
+    def test_codex_loop_detected_end_to_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.jsonl"
+            calls = ['{"type":"function_call","name":"shell","arguments":"{\\"cmd\\": \\"ls -la\\"}"}'] * 3
+            p.write_text("\n".join(calls) + "\n")
+            r = subprocess.run([sys.executable, "loopguard.py", "watch", str(p), "--once", "--from-start"],
+                               capture_output=True, timeout=15)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn(b"LOOP", r.stdout)

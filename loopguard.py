@@ -103,17 +103,35 @@ def parse_event(raw_line: str) -> dict:
 
         # Support several common transcript schemas:
         #   Claude Code: {"type":"tool_use","name":"...", "input":{...}}
+        #                or {"message":{"content":[{"type":"tool_use","name":"..."}]}}
         #   Generic:     {"tool":"...", "tool_input":{...}}
-        #   Wrapped:     {"message":{"content":[{"type":"tool_use","name":"..."}]}}
+        #   Codex CLI:   {"type":"function_call","name":"...","arguments":"{...}"} (args as JSON string)
+        #   Gemini CLI:  {"toolName":"..."} or {"functionCall":{"name":"...","args":{...}}}
         tool_name = None
         tool_args = None
 
         if "tool" in obj:
             tool_name = obj["tool"]
             tool_args = obj.get("tool_input") or obj.get("tool_args") or {}
+        elif "toolName" in obj:
+            tool_name = obj["toolName"]
+            tool_args = obj.get("toolArgs") or obj.get("args") or {}
         elif obj.get("type") == "tool_use":
             tool_name = obj.get("name")
             tool_args = obj.get("input") or {}
+        elif obj.get("type") == "function_call":
+            tool_name = obj.get("name")
+            raw = obj.get("arguments")
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except json.JSONDecodeError:
+                    raw = {}
+            tool_args = raw or {}
+        elif isinstance(obj.get("functionCall"), dict):
+            fc = obj["functionCall"]
+            tool_name = fc.get("name")
+            tool_args = fc.get("args") or fc.get("parameters") or {}
         else:
             # Try diving into message.content list (Claude Code .jsonl format)
             msg = obj.get("message") or {}

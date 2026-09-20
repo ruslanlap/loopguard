@@ -1,8 +1,15 @@
 # loopguard
 
+[![tests](https://github.com/ruslanlap/loopguard/actions/workflows/tests.yml/badge.svg)](https://github.com/ruslanlap/loopguard/actions/workflows/tests.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![No dependencies](https://img.shields.io/badge/dependencies-0-success.svg)](#install)
+
 **Stop agent loops before they burn your tokens.**
 
-AI CLI agents (Claude Code, etc.) sometimes get stuck repeating the same tool call—`bash ls -la`, `bash ls -la`, `bash ls -la`—or oscillate between two actions while you're away from your desk. `loopguard` watches the session transcript and alerts you before the damage compounds.
+AI CLI agents get stuck repeating the same tool call—`bash ls -la`, `bash ls -la`, `bash ls -la`—or oscillate between two actions while you're away from your desk. `loopguard` watches the session transcript and alerts you before the damage compounds.
+
+**Works with any agent that writes JSONL tool events** — parsers included for Claude Code, Codex CLI, Gemini CLI, and the generic `{"tool": ..., "tool_input": ...}` schema; unknown schemas degrade to activity-only tracking instead of crashing.
 
 ---
 
