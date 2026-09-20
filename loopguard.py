@@ -2,8 +2,8 @@
 """
 loopguard.py — Watchdog for AI CLI agents.
 
-Detects loops and stalls in JSONL session transcripts (Claude Code layout
-~/.claude/projects/**/*.jsonl) and alerts via stdout + optional Telegram.
+Detects loops and stalls in JSONL session transcripts (Claude Code, Codex,
+Gemini CLI layouts; any {"tool":...} JSONL) and alerts via stdout + Telegram.
 
 Usage:
     python3 loopguard.py watch <path> [options]
@@ -20,7 +20,6 @@ import os
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from collections import deque
 from datetime import datetime, timezone
@@ -32,7 +31,6 @@ LOOP_M = 20       # sliding window size (last M events)
 STALL_S = 300     # seconds of no new lines → STALL
 POLL_INTERVAL = 2 # seconds between file polls (watch mode)
 
-# ponytail: LOOP_M could be made configurable via --window flag
 # ponytail: STALL detection is wall-clock based; NTP jumps could confuse it
 
 
@@ -224,7 +222,7 @@ def send_telegram(token: str, chat_id: str, text: str) -> None:
         data=payload,
         headers={
             "Content-Type": "application/json",
-            "User-Agent": "loopguard/1.0 (https://github.com/user/loopguard)",
+            "User-Agent": "loopguard/1.0 (https://github.com/ruslanlap/loopguard)",
         },
         method="POST",
     )
@@ -273,43 +271,6 @@ def find_newest_jsonl(directory: str) -> str | None:
 
 
 # ── Core analysis logic ────────────────────────────────────────────────────────
-
-def analyse_lines(
-    lines: list[str],
-    loop_n: int = LOOP_N,
-    loop_m: int = LOOP_M,
-) -> tuple[bool, str, str]:
-    """
-    Analyse a list of raw JSONL lines for LOOP or OSCILLATION.
-
-    Returns (incident_detected, kind, detail).
-    kind is 'LOOP', 'OSCILLATION', or '' when clean.
-    """
-    window: deque = deque(maxlen=loop_m)
-
-    for raw in lines:
-        raw = raw.strip()
-        if not raw:
-            continue
-        ev = parse_event(raw)
-        if ev["tool"] is not None:
-            fp = make_fingerprint(ev["tool"], ev["args_hash"])
-        else:
-            fp = None  # generic activity; doesn't contribute to detection
-        window.append(fp)
-
-        # Check oscillation first (stricter pattern)
-        osc, osc_detail = detect_oscillation(window)
-        if osc:
-            return True, "OSCILLATION", f"pattern {osc_detail}"
-
-        loop, loop_fp = detect_loop(window, loop_n)
-        if loop:
-            tool_name = loop_fp.split(":")[0]
-            return True, "LOOP", f"tool '{tool_name}' repeated {loop_n}+ times in last {loop_m} events"
-
-    return False, "", ""
-
 
 # ── Watch loop ─────────────────────────────────────────────────────────────────
 
@@ -361,11 +322,8 @@ def watch_file(
             else:
                 fp = None
 
-            # Any *new unique* tool call resets the incident flag
-            if fp is not None and not incident_reported:
-                pass  # normal accumulation
-            elif fp is not None and incident_reported:
-                # Reset if we see something new that isn't all repeats
+            # A *new unique* tool call resets the incident flag
+            if fp is not None and incident_reported:
                 seen_fps = set(f for f in window if f is not None)
                 if fp not in seen_fps:
                     incident_reported = False

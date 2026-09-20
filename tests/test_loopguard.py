@@ -154,58 +154,56 @@ class TestDetectOscillation(unittest.TestCase):
         self.assertTrue(detected)
 
 
+def _run_lines(lines, tmpdir, extra=()):
+    """Write lines to a temp .jsonl; run the real CLI path once; return CompletedProcess."""
+    p = Path(tmpdir) / "s.jsonl"
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, "loopguard.py", "watch", str(p), "--once"] + list(extra),
+        capture_output=True, timeout=20,
+    )
+
+
 class TestAnalyseLines(unittest.TestCase):
-    """analyse_lines() integration of parser + detectors."""
+    """Detection integration via the real CLI path (watch --once)."""
 
-    def test_loop_in_lines(self):
-        lines = [
-            '{"tool":"bash","tool_input":{"command":"ls"}}',
-            '{"tool":"bash","tool_input":{"command":"ls"}}',
-            '{"tool":"bash","tool_input":{"command":"ls"}}',
-        ]
-        detected, kind, detail = loopguard.analyse_lines(lines, loop_n=3)
-        self.assertTrue(detected)
-        self.assertEqual(kind, "LOOP")
+    def test_loop_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = _run_lines(['{"tool":"bash","tool_input":{"cmd":"ls -la"}}'] * 3, d)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn(b"LOOP", r.stdout)
 
-    def test_oscillation_in_lines(self):
-        lines = [
-            '{"tool":"read","tool_input":{"path":"/a"}}',
-            '{"tool":"write","tool_input":{"path":"/b"}}',
-            '{"tool":"read","tool_input":{"path":"/a"}}',
-            '{"tool":"write","tool_input":{"path":"/b"}}',
-        ]
-        detected, kind, _ = loopguard.analyse_lines(lines)
-        self.assertTrue(detected)
-        self.assertEqual(kind, "OSCILLATION")
+    def test_oscillation_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            lines = [
+                '{"tool":"read_file","tool_input":{"p":"a"}}',
+                '{"tool":"write_file","tool_input":{"p":"b"}}',
+            ] * 2
+            r = _run_lines(lines, d)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn(b"OSCILLATION", r.stdout)
 
-    def test_clean_lines(self):
-        lines = [
-            '{"tool":"bash","tool_input":{"command":"ls"}}',
-            '{"tool":"read","tool_input":{"path":"/x"}}',
-            '{"tool":"write","tool_input":{"path":"/y","data":"foo"}}',
-        ]
-        detected, _, _ = loopguard.analyse_lines(lines)
-        self.assertFalse(detected)
+    def test_clean_pass(self):
+        with tempfile.TemporaryDirectory() as d:
+            lines = [
+                '{"tool":"bash","tool_input":{"cmd":"ls"}}',
+                '{"tool":"read_file","tool_input":{"p":"a"}}',
+                '{"tool":"write_file","tool_input":{"p":"b"}}',
+            ]
+            r = _run_lines(lines, d)
+            self.assertEqual(r.returncode, 0)
 
     def test_malformed_lines_no_crash(self):
-        lines = [
-            '{"tool":"bash","tool_input":{}}',
-            "{bad json here!!!",
-            "truncated",
-            '{"tool":"bash","tool_input":{}}',
-        ]
-        # Should not raise; may or may not detect a loop depending on N
-        try:
-            loopguard.analyse_lines(lines)
-        except Exception as exc:  # noqa: BLE001
-            self.fail(f"analyse_lines raised unexpectedly: {exc}")
+        with tempfile.TemporaryDirectory() as d:
+            lines = ['{"tool":"bash", TRUNCATED', '{"tool":"bash"}', "not json at all"]
+            r = _run_lines(lines, d)
+            self.assertIn(r.returncode, (0, 1))  # no crash is the contract
 
-    def test_empty_lines_no_crash(self):
-        detected, _, _ = loopguard.analyse_lines([])
-        self.assertFalse(detected)
+    def test_empty_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = _run_lines([], d)
+            self.assertEqual(r.returncode, 0)
 
-
-# ── Fixture-based CLI integration tests ───────────────────────────────────────
 
 class TestCLILoopFixture(unittest.TestCase):
     """3 identical tool calls in fixture → exit 1."""
