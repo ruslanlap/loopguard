@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from collections import deque
 import unittest
 
 # Allow importing loopguard from the parent directory
@@ -322,3 +323,53 @@ class TestMultiAgentFormats(unittest.TestCase):
                                capture_output=True, timeout=15)
             self.assertEqual(r.returncode, 1)
             self.assertIn(b"LOOP", r.stdout)
+
+
+class TestBrainstormFixes(unittest.TestCase):
+    """W1 multi-block lines, W3 --once reads from start, W2 --osc-n, replay."""
+
+    def test_multi_block_line_all_extracted(self):
+        line = ('{"timestamp":"2026-09-20T10:00:00Z","message":{"content":['
+                '{"type":"tool_use","name":"Bash","input":{"cmd":"ls"}},'
+                '{"type":"tool_use","name":"Bash","input":{"cmd":"ls"}}]}}')
+        evs = loopguard.parse_events(line)
+        self.assertEqual(len(evs), 2)
+        self.assertEqual([e["tool"] for e in evs], ["Bash", "Bash"])
+        self.assertEqual(evs[0]["args_hash"], evs[1]["args_hash"])
+
+    def test_multi_block_line_loop_detected_end_to_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.jsonl"
+            line = ('{"message":{"content":['
+                    '{"type":"tool_use","name":"Bash","input":{"cmd":"ls -la"}},'
+                    '{"type":"tool_use","name":"Bash","input":{"cmd":"ls -la"}}]}}')
+            p.write_text("\n".join([line] * 2) + "\n")  # 4 identical calls in 2 lines
+            r = subprocess.run([sys.executable, "loopguard.py", "watch", str(p), "--once"],
+                               capture_output=True, timeout=20)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn(b"LOOP", r.stdout)
+
+    def test_once_reads_whole_file_without_from_start(self):
+        # W3: --once must analyse the full file even without --from-start
+        with tempfile.TemporaryDirectory() as d:
+            r = _run_lines(['{"tool":"bash","tool_input":{"cmd":"ls -la"}}'] * 3, d)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn(b"LOOP", r.stdout)
+
+    def test_osc_n_tunable(self):
+        # read→write→read→write→read→write = oscillation with n=4 but also n=6
+        fps = ["read:x", "write:y"] * 3
+        w = deque(fps, maxlen=20)
+        self.assertTrue(loopguard.detect_oscillation(w, 4)[0])
+        w2 = deque(fps[:4], maxlen=20)
+        self.assertFalse(loopguard.detect_oscillation(w2, 6)[0])  # too short for 6
+
+    def test_replay_detects_loop(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.jsonl"
+            p.write_text("\n".join(['{"tool":"bash","tool_input":{"cmd":"ls -la"}}'] * 3) + "\n")
+            r = subprocess.run([sys.executable, "loopguard.py", "replay", str(p)],
+                               capture_output=True, timeout=20)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn(b"LOOP", r.stdout)
+            self.assertIn(b"bash", r.stdout)

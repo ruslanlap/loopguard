@@ -9,7 +9,7 @@
 
 AI CLI agents get stuck repeating the same tool call—`bash ls -la`, `bash ls -la`, `bash ls -la`—or oscillate between two actions while you're away from your desk. `loopguard` watches the session transcript and alerts you before the damage compounds.
 
-**Works with any agent that writes JSONL tool events** — parsers included for Claude Code, Codex CLI, Gemini CLI, and the generic `{"tool": ..., "tool_input": ...}` schema; unknown schemas degrade to activity-only tracking instead of crashing.
+**Works with any agent that writes JSONL tool events** — parsers included for Claude Code (including multi-tool lines), Codex CLI, Gemini CLI, and the generic `{"tool": ..., "tool_input": ...}` schema; unknown schemas degrade to activity-only tracking instead of crashing.
 
 ---
 
@@ -98,3 +98,9 @@ python3 -m unittest discover -s tests
 ## Demo
 
 ![loopguard catching an agent loop](./demo.gif)
+
+Real output of `loopguard replay session.jsonl` — annotated event-by-event replay with detector verdicts, also usable to debug thresholds on your own transcripts:
+
+```bash
+loopguard replay ~/.claude/projects/my-project/
+```

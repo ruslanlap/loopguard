@@ -71,42 +71,47 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Sliding window size for LOOP detection (default: {LOOP_M}).",
     )
     watch.add_argument(
+        "--osc-n",
+        type=int,
+        default=4,
+        metavar="N",
+        help="Window size for OSCILLATION detection (default: 4).",
+    )
+    watch.add_argument(
         "--stall-s",
         type=int,
         default=STALL_S,
         metavar="S",
         help=f"Seconds of inactivity before STALL alert (default: {STALL_S}).",
     )
+
+    replay = sub.add_parser("replay", help="Print an annotated event-by-event replay with detector verdicts.")
+    replay.add_argument("path", help="Path to a .jsonl file or directory.")
     return p
 
 
 # ── JSONL parsing ──────────────────────────────────────────────────────────────
 
-def parse_event(raw_line: str) -> dict:
+def parse_events(raw_line: str) -> list[dict]:
     """
-    Parse a single JSONL line into a normalised event dict.
+    Parse a JSONL line into a list of normalised event dicts.
 
-    Returns a dict with keys:
+    Claude Code batches several tool_use blocks into one line; we return them
+    all. Malformed lines return a single generic-activity event.
+
+    Each dict has keys:
         timestamp (str|None), tool (str|None), args_hash (str|None)
-
-    Never raises — malformed lines are returned as generic activity with
-    tool=None and args_hash=None so they don't contribute to loop detection.
     """
-    event = {"timestamp": None, "tool": None, "args_hash": None}
+    generic = [{"timestamp": None, "tool": None, "args_hash": None}]
     try:
         obj = json.loads(raw_line)
         if not isinstance(obj, dict):
-            return event
-        event["timestamp"] = obj.get("timestamp") or obj.get("ts")
+            return generic
+        ts = obj.get("timestamp") or obj.get("ts")
 
-        # Support several common transcript schemas:
-        #   Claude Code: {"type":"tool_use","name":"...", "input":{...}}
-        #                or {"message":{"content":[{"type":"tool_use","name":"..."}]}}
-        #   Generic:     {"tool":"...", "tool_input":{...}}
-        #   Codex CLI:   {"type":"function_call","name":"...","arguments":"{...}"} (args as JSON string)
-        #   Gemini CLI:  {"toolName":"..."} or {"functionCall":{"name":"...","args":{...}}}
         tool_name = None
         tool_args = None
+        events: list[dict] = []
 
         if "tool" in obj:
             tool_name = obj["tool"]
@@ -131,23 +136,29 @@ def parse_event(raw_line: str) -> dict:
             tool_name = fc.get("name")
             tool_args = fc.get("args") or fc.get("parameters") or {}
         else:
-            # Try diving into message.content list (Claude Code .jsonl format)
+            # Claude Code .jsonl: message.content may hold SEVERAL tool_use
+            # blocks per line — extract all of them, not just the first.
             msg = obj.get("message") or {}
             content = msg.get("content") or []
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
-                        tool_name = block.get("name")
-                        tool_args = block.get("input") or {}
-                        break
+                        ev = {"timestamp": ts, "tool": block.get("name"),
+                              "args_hash": _hash_args(block.get("input") or {})}
+                        events.append(ev)
+                if events:
+                    return events
 
         if tool_name:
-            event["tool"] = tool_name
-            event["args_hash"] = _hash_args(tool_args)
+            return [{"timestamp": ts, "tool": tool_name, "args_hash": _hash_args(tool_args)}]
+        return [{"timestamp": ts, "tool": None, "args_hash": None}]
     except (json.JSONDecodeError, TypeError, ValueError):
-        # Malformed line — treat as generic activity (no tool info)
-        pass
-    return event
+        return generic
+
+
+def parse_event(raw_line: str) -> dict:
+    """Back-compat single-event view of parse_events()."""
+    return parse_events(raw_line)[0]
 
 
 def _hash_args(args) -> str:
@@ -184,17 +195,17 @@ def detect_loop(window: deque, n: int) -> tuple[bool, str]:
     return False, ""
 
 
-def detect_oscillation(window: deque) -> tuple[bool, str]:
+def detect_oscillation(window: deque, n: int = 4) -> tuple[bool, str]:
     """
     OSCILLATION: A→B→A→B pattern — exactly 2 unique fingerprints alternating
-    across the last 4 events.
+    across the last n events (default 4).
 
     Returns (detected, "A,B" fingerprints or empty).
     """
     recent = [fp for fp in window if fp is not None]
-    if len(recent) < 4:
+    if len(recent) < n:
         return False, ""
-    tail = recent[-4:]
+    tail = recent[-n:]
     # Pattern: [a, b, a, b] where a != b and tail[0]==tail[2] and tail[1]==tail[3]
     a, b, c, d = tail
     if a == c and b == d and a != b:
@@ -281,6 +292,7 @@ def watch_file(
     from_start: bool = False,
     loop_n: int = LOOP_N,
     loop_m: int = LOOP_M,
+    osc_n: int = 4,
     stall_s: int = STALL_S,
 ) -> int:
     """
@@ -316,38 +328,38 @@ def watch_file(
             last_activity = time.monotonic()
             stall_reported = False  # reset stall on new activity
 
-            ev = parse_event(raw)
-            if ev["tool"] is not None:
-                fp = make_fingerprint(ev["tool"], ev["args_hash"])
-            else:
-                fp = None
+            for ev in parse_events(raw):
+                if ev["tool"] is not None:
+                    fp = make_fingerprint(ev["tool"], ev["args_hash"])
+                else:
+                    fp = None
 
-            # A *new unique* tool call resets the incident flag
-            if fp is not None and incident_reported:
-                seen_fps = set(f for f in window if f is not None)
-                if fp not in seen_fps:
-                    incident_reported = False
+                # A *new unique* tool call resets the incident flag
+                if fp is not None and incident_reported:
+                    seen_fps = set(f for f in window if f is not None)
+                    if fp not in seen_fps:
+                        incident_reported = False
 
-            window.append(fp)
+                window.append(fp)
 
-            osc, osc_detail = detect_oscillation(window)
-            if osc and not incident_reported:
-                alert("OSCILLATION", f"pattern {osc_detail}")
-                incident_reported = True
-                if once:
-                    return 1
+                osc, osc_detail = detect_oscillation(window, osc_n)
+                if osc and not incident_reported:
+                    alert("OSCILLATION", f"pattern {osc_detail}")
+                    incident_reported = True
+                    if once:
+                        return 1
 
-            loop_hit, loop_fp = detect_loop(window, loop_n)
-            if loop_hit and not incident_reported:
-                tool_name = loop_fp.split(":")[0]
-                alert(
-                    "LOOP",
-                    f"tool '{tool_name}' repeated {loop_n}+ times in last {loop_m} events",
-                )
-                incident_reported = True
-                if once:
-                    return 1
-
+                loop_hit, loop_fp = detect_loop(window, loop_n)
+                if loop_hit and not incident_reported:
+                    tool_name = loop_fp.split(":")[0]
+                    alert(
+                        "LOOP",
+                        f"tool '{tool_name}' repeated {loop_n}+ times in last {loop_m} events",
+                    )
+                    incident_reported = True
+                    if once:
+                        return 1
+        # ponytail: new_data tracked for callers that may want it; unused now
         return 0
 
     # ── --once mode: read everything and exit ──────────────────────────────────
@@ -390,6 +402,40 @@ def watch_file(
         fh.close()
 
 
+# ── Replay ─────────────────────────────────────────────────────────────────────
+
+def replay_file(filepath: str, *, loop_n: int = LOOP_N, loop_m: int = LOOP_M, osc_n: int = 4) -> int:
+    """
+    Print one annotated line per tool event with the detector verdict at that
+    point. Doubles as a debug surface and an honest terminal demo.
+    """
+    window: deque = deque(maxlen=loop_m)
+    exit_code = 0
+    try:
+        fh = open(filepath, "r", encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"[loopguard] Cannot open {filepath}: {exc}", file=sys.stderr)
+        return 2
+
+    with fh:
+        for i, raw in enumerate(fh, 1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            for ev in parse_events(raw):
+                if ev["tool"] is None:
+                    continue
+                fp = make_fingerprint(ev["tool"], ev["args_hash"])
+                window.append(fp)
+                osc, _ = detect_oscillation(window, osc_n)
+                loop_hit, _ = detect_loop(window, loop_n)
+                verdict = "⚠ OSCILLATION" if osc else ("⚠ LOOP" if loop_hit else "ok")
+                if osc or loop_hit:
+                    exit_code = 1
+                print(f"{i:>4}  {ev['tool']:<24} {verdict}", flush=True)
+    return exit_code
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
@@ -423,12 +469,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[loopguard] File not found: {target}", file=sys.stderr)
         return 2
 
+    if args.command == "replay":
+        return replay_file(target)
+
     return watch_file(
         target,
         once=args.once,
         from_start=args.from_start,
         loop_n=args.loop_n,
         loop_m=args.loop_m,
+        osc_n=args.osc_n,
         stall_s=args.stall_s,
     )
 
