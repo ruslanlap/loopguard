@@ -89,6 +89,4 @@ python3 -m unittest discover -s tests
 
 ## Demo
 
-![loopguard demo placeholder](./demo.gif)
-
-<!-- TODO: replace above with actual terminal recording -->
+![loopguard catching an agent loop](./demo.gif)
