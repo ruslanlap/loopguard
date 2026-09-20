@@ -22,10 +22,11 @@ AI CLI agents (Claude Code, etc.) sometimes get stuck repeating the same tool ca
 No dependencies. Stdlib only. Python 3.10+.
 
 ```bash
-git clone https://github.com/ruslanlap/loopguard
-cd loopguard
-# done
+curl -fsSL https://raw.githubusercontent.com/ruslanlap/loopguard/main/loopguard.py \
+  -o ~/.local/bin/loopguard && chmod +x ~/.local/bin/loopguard
 ```
+
+(`~/.local/bin` must be on PATH; `mkdir -p ~/.local/bin` if it doesn't exist. Or just `git clone` and run `./loopguard.py`.)
 
 ---
 
@@ -33,16 +34,16 @@ cd loopguard
 
 ```bash
 # Watch a specific transcript file (tail from end, poll every 2s)
-python3 loopguard.py watch ~/.claude/projects/my-project/session.jsonl
+loopguard watch ~/.claude/projects/my-project/session.jsonl
 
 # Watch a whole project directory (picks newest .jsonl automatically)
-python3 loopguard.py watch ~/.claude/projects/my-project/
+loopguard watch ~/.claude/projects/my-project/
 
 # Analyse existing file and exit immediately (CI / tests)
-python3 loopguard.py watch session.jsonl --once --from-start
+loopguard watch session.jsonl --once --from-start
 
 # Process from beginning (not just new lines)
-python3 loopguard.py watch session.jsonl --from-start
+loopguard watch session.jsonl --from-start
 ```
 
 ### Telegram alerts
@@ -52,7 +53,7 @@ Set two environment variables and loopguard will ping you:
 ```bash
 export LOOPGUARD_TG_TOKEN="123456:ABC-your-bot-token"
 export LOOPGUARD_TG_CHAT_ID="987654321"
-python3 loopguard.py watch ~/.claude/projects/
+loopguard watch ~/.claude/projects/
 ```
 
 ---
