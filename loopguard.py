@@ -435,6 +435,14 @@ def watch_file(
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows consoles default to cp1252; alerts contain UTF-8 emoji. Force UTF-8 or
+    # printing crashes with UnicodeEncodeError and the alert never reaches the user.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
     parser = build_parser()
     args = parser.parse_args(argv)
 
