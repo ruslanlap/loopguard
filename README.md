@@ -91,15 +91,4 @@ python3 -m unittest discover -s tests
 
 ![loopguard demo placeholder](./demo.gif)
 
-<!-- ponytail: replace above with actual terminal recording -->
-
----
-
-## Ceilings & known limits
-
-```
-# ponytail: LOOP_M window is fixed; no adaptive sizing
-# ponytail: STALL detection is wall-clock; NTP jumps could confuse it
-# ponytail: Telegram send is best-effort; no retry on transient errors
-# ponytail: Only the newest .jsonl is watched when given a directory
-```
+<!-- TODO: replace above with actual terminal recording -->
