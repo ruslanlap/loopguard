@@ -1,0 +1,4 @@
+{"timestamp": "2024-01-01T10:00:00Z", "tool": "read_file", "tool_input": {"path": "/tmp/a.txt"}}
+{"timestamp": "2024-01-01T10:00:02Z", "tool": "write_file", "tool_input": {"path": "/tmp/b.txt", "content": "hello"}}
+{"timestamp": "2024-01-01T10:00:04Z", "tool": "read_file", "tool_input": {"path": "/tmp/a.txt"}}
+{"timestamp": "2024-01-01T10:00:06Z", "tool": "write_file", "tool_input": {"path": "/tmp/b.txt", "content": "hello"}}

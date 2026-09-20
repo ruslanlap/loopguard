@@ -1,0 +1,5 @@
+{"timestamp": "2024-01-01T10:00:00Z", "tool": "bash", "tool_input": {"command": "ls -la"}}
+{"timestamp": "2024-01-01T10:00:02Z", "tool": "bash", "tool_input": {"command": "cat file.txt"}}
+{"timestamp": "2024-01-01T10:00:04Z", "tool": "bash", "tool_input": {"command": "ls -la"}}
+{"timestamp": "2024-01-01T10:00:06Z", "tool": "bash", "tool_input": {"command": "ls -la"}}
+{"timestamp": "2024-01-01T10:00:08Z", "tool": "bash", "tool_input": {"command": "ls -la"}}

@@ -1,0 +1,5 @@
+{"timestamp": "2024-01-01T10:00:00Z", "tool": "bash", "tool_input": {"command": "ls"}}
+{"this is not valid json at all !!!
+{"timestamp": "2024-01-01T10:00:04Z", "tool": "bash", "tool_input": {"command": "pwd"}}
+truncated-no-closing-brace
+{"timestamp": "2024-01-01T10:00:08Z"}

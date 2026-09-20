@@ -1,0 +1,105 @@
+# loopguard
+
+**Stop agent loops before they burn your tokens.**
+
+AI CLI agents (Claude Code, etc.) sometimes get stuck repeating the same tool call—`bash ls -la`, `bash ls -la`, `bash ls -la`—or oscillate between two actions while you're away from your desk. `loopguard` watches the session transcript and alerts you before the damage compounds.
+
+---
+
+## The pain
+
+> "Wait, actually…" — your agent, for the fifth time in a row.
+
+- Agent loops on the same `bash` command because the output never changes.  
+- Agent oscillates: read → write → read → write, forever.  
+- Agent stalls for 5 minutes because a tool hung and nobody noticed.  
+- You come back to a blank terminal, 2,000 token burn, and zero progress.
+
+---
+
+## Install
+
+No dependencies. Stdlib only. Python 3.10+.
+
+```bash
+git clone https://github.com/ruslanlap/loopguard
+cd loopguard
+# done
+```
+
+---
+
+## Usage
+
+```bash
+# Watch a specific transcript file (tail from end, poll every 2s)
+python3 loopguard.py watch ~/.claude/projects/my-project/session.jsonl
+
+# Watch a whole project directory (picks newest .jsonl automatically)
+python3 loopguard.py watch ~/.claude/projects/my-project/
+
+# Analyse existing file and exit immediately (CI / tests)
+python3 loopguard.py watch session.jsonl --once --from-start
+
+# Process from beginning (not just new lines)
+python3 loopguard.py watch session.jsonl --from-start
+```
+
+### Telegram alerts
+
+Set two environment variables and loopguard will ping you:
+
+```bash
+export LOOPGUARD_TG_TOKEN="123456:ABC-your-bot-token"
+export LOOPGUARD_TG_CHAT_ID="987654321"
+python3 loopguard.py watch ~/.claude/projects/
+```
+
+---
+
+## Detectors
+
+| Detector     | Default trigger                               | Flag to tune             |
+|--------------|-----------------------------------------------|--------------------------|
+| **LOOP**     | Same tool+args 3× in last 20 events           | `--loop-n N --loop-m M`  |
+| **OSCILLATION** | A→B→A→B pattern (4 events, 2 unique)       | _(not yet tunable)_      |
+| **STALL**    | No new lines for 300 s while file is idle     | `--stall-s S`            |
+
+One alert per incident. Resets automatically when a new unique tool call appears.
+
+---
+
+## Exit codes
+
+| Code | Meaning                                |
+|------|----------------------------------------|
+| `0`  | Healthy (used with `--once`)           |
+| `1`  | Incident detected (used with `--once`) |
+| `2`  | Usage error                            |
+
+---
+
+## Running the tests
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+---
+
+## Demo
+
+![loopguard demo placeholder](./demo.gif)
+
+<!-- ponytail: replace above with actual terminal recording -->
+
+---
+
+## Ceilings & known limits
+
+```
+# ponytail: LOOP_M window is fixed; no adaptive sizing
+# ponytail: STALL detection is wall-clock; NTP jumps could confuse it
+# ponytail: Telegram send is best-effort; no retry on transient errors
+# ponytail: Only the newest .jsonl is watched when given a directory
+```
