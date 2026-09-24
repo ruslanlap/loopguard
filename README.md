@@ -70,7 +70,8 @@ loopguard watch ~/.claude/projects/
 | Detector     | Default trigger                               | Flag to tune             |
 |--------------|-----------------------------------------------|--------------------------|
 | **LOOP**     | Same tool+args 3× in last 20 events           | `--loop-n N --loop-m M`  |
-| **OSCILLATION** | A→B→A→B pattern (4 events, 2 unique)       | _(not yet tunable)_      |
+| **OSCILLATION** | A→B→A→B pattern (4 events, 2 unique)       | `--osc-n N`              |
+| **FUZZY**    | Same tool 8× with *different* args, opt-in    | `--fuzzy --fuzzy-n N`    |
 | **STALL**    | No new lines for 300 s while file is idle     | `--stall-s S`            |
 
 One alert per incident. Resets automatically when a new unique tool call appears.

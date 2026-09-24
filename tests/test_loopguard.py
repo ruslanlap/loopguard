@@ -4,6 +4,7 @@ tests/test_loopguard.py — unittest suite for loopguard.py
 Run with:  python3 -m unittest discover -s tests
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -276,6 +277,56 @@ class TestNoArgNormalisationStability(unittest.TestCase):
             ev_b["args_hash"],
             "Args hash must be key-order independent",
         )
+
+
+class TestDetectFuzzy(unittest.TestCase):
+    """detect_fuzzy: same tool N times with varying arguments."""
+
+    def test_varying_args_detected(self):
+        fps = [f"bash:{i:016x}" for i in range(8)]  # same tool, different hashes
+        self.assertEqual(loopguard.detect_fuzzy(deque(fps), 8), (True, "bash"))
+
+    def test_below_threshold_not_detected(self):
+        fps = [f"bash:{i:016x}" for i in range(7)]
+        self.assertEqual(loopguard.detect_fuzzy(deque(fps), 8), (False, ""))
+
+    def test_mixed_tools_counted_separately(self):
+        fps = [f"bash:{i:016x}" for i in range(4)] + [f"read:{i:016x}" for i in range(4)]
+        self.assertEqual(loopguard.detect_fuzzy(deque(fps), 8), (False, ""))
+
+    def test_none_entries_ignored(self):
+        fps = [None] * 10 + [f"bash:{i:016x}" for i in range(3)]
+        self.assertEqual(loopguard.detect_fuzzy(deque(fps), 3), (True, "bash"))
+
+
+class TestFuzzyCLI(unittest.TestCase):
+    """--fuzzy end-to-end on real CLI invocations."""
+
+    def _write(self, lines: list[str]) -> str:
+        tf = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        tf.write("\n".join(lines))
+        tf.close()
+        self.addCleanup(os.unlink, tf.name)
+        return tf.name
+
+    def test_drifting_loop_detected_with_fuzzy(self):
+        lines = [
+            json.dumps({"type": "tool_use", "name": "bash", "input": {"command": f"echo {i}"}})
+            for i in range(10)
+        ]
+        path = self._write(lines)
+        self.assertEqual(run_once(path, ["--fuzzy", "--fuzzy-n", "8"]), 1)
+
+    def test_drifting_loop_silent_without_fuzzy(self):
+        lines = [
+            json.dumps({"type": "tool_use", "name": "bash", "input": {"command": f"echo {i}"}})
+            for i in range(10)
+        ]
+        path = self._write(lines)
+        self.assertEqual(run_once(path), 0)
+
+    def test_clean_fixture_no_fuzzy_alert(self):
+        self.assertEqual(run_once(fixture("clean.jsonl"), ["--fuzzy"]), 0)
 
 
 if __name__ == "__main__":

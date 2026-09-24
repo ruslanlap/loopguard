@@ -84,6 +84,20 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="S",
         help=f"Seconds of inactivity before STALL alert (default: {STALL_S}).",
     )
+    watch.add_argument(
+        "--fuzzy",
+        action="store_true",
+        help="Also detect drifting loops: same tool repeated with DIFFERENT arguments. "
+        "Off by default — legitimate agents repeat tools with varying args; "
+        "use a high --fuzzy-n to avoid false positives.",
+    )
+    watch.add_argument(
+        "--fuzzy-n",
+        type=int,
+        default=8,
+        metavar="N",
+        help="Same-tool repeat threshold for --fuzzy, regardless of arguments (default: 8).",
+    )
 
     replay = sub.add_parser("replay", help="Print an annotated event-by-event replay with detector verdicts.")
     replay.add_argument("path", help="Path to a .jsonl file or directory.")
@@ -213,6 +227,25 @@ def detect_oscillation(window: deque, n: int = 4) -> tuple[bool, str]:
     return False, ""
 
 
+def detect_fuzzy(window: deque, n: int) -> tuple[bool, str]:
+    """
+    FUZZY: same tool repeated >= n times regardless of arguments.
+
+    Catches drifting loops (echo 1, echo 2, echo 3…) that exact-fingerprint
+    detection misses. Off by default: healthy agents legitimately repeat tools
+    with varying args — hence the higher default threshold (8 vs 3).
+    """
+    counts: dict[str, int] = {}
+    for fp in window:
+        if fp is None:
+            continue
+        tool = fp.split(":", 1)[0]
+        counts[tool] = counts.get(tool, 0) + 1
+        if counts[tool] >= n:
+            return True, tool
+    return False, ""
+
+
 # ── Alerting ──────────────────────────────────────────────────────────────────
 
 def format_alert(kind: str, detail: str) -> str:
@@ -294,6 +327,8 @@ def watch_file(
     loop_m: int = LOOP_M,
     osc_n: int = 4,
     stall_s: int = STALL_S,
+    fuzzy: bool = False,
+    fuzzy_n: int = 8,
 ) -> int:
     """
     Watch *filepath* for loop/stall incidents.
@@ -359,6 +394,18 @@ def watch_file(
                     incident_reported = True
                     if once:
                         return 1
+
+                if fuzzy:
+                    fuzzy_hit, fuzzy_tool = detect_fuzzy(window, fuzzy_n)
+                    if fuzzy_hit and not incident_reported:
+                        alert(
+                            "FUZZY",
+                            f"tool '{fuzzy_tool}' repeated {fuzzy_n}+ times with varying "
+                            f"arguments in last {loop_m} events",
+                        )
+                        incident_reported = True
+                        if once:
+                            return 1
         # ponytail: new_data tracked for callers that may want it; unused now
         return 0
 
@@ -480,6 +527,8 @@ def main(argv: list[str] | None = None) -> int:
         loop_m=args.loop_m,
         osc_n=args.osc_n,
         stall_s=args.stall_s,
+        fuzzy=getattr(args, "fuzzy", False),
+        fuzzy_n=getattr(args, "fuzzy_n", 8),
     )
 
 
