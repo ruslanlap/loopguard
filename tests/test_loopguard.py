@@ -518,3 +518,15 @@ class TestBrainstormFixes(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
             self.assertIn(b"LOOP", r.stdout)
             self.assertIn(b"bash", r.stdout)
+
+    def test_replay_detects_repeat_error(self):
+        lines = "\n".join(
+            f'{{"tool":"bash","tool_input":{{"cmd":"make {i}"}},"exit_code":1}}' for i in range(3)
+        ) + "\n"
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.jsonl"
+            p.write_text(lines, encoding="utf-8")
+            r = subprocess.run([sys.executable, "loopguard.py", "replay", str(p)],
+                               capture_output=True, timeout=20)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn(b"REPEAT_ERROR", r.stdout)
