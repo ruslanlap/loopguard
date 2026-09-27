@@ -109,6 +109,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     replay = sub.add_parser("replay", help="Print an annotated event-by-event replay with detector verdicts.")
     replay.add_argument("path", help="Path to a .jsonl file or directory.")
+    replay.add_argument(
+        "--repeat-n", type=int, default=REPEAT_N, metavar="N",
+        help=f"Consecutive failed bash threshold for REPEAT_ERROR (default: {REPEAT_N}).",
+    )
     return p
 
 
@@ -501,12 +505,13 @@ def watch_file(
 
 # ── Replay ─────────────────────────────────────────────────────────────────────
 
-def replay_file(filepath: str, *, loop_n: int = LOOP_N, loop_m: int = LOOP_M, osc_n: int = 4) -> int:
+def replay_file(filepath: str, *, loop_n: int = LOOP_N, loop_m: int = LOOP_M, osc_n: int = 4, repeat_n: int = REPEAT_N) -> int:
     """
     Print one annotated line per tool event with the detector verdict at that
     point. Doubles as a debug surface and an honest terminal demo.
     """
     window: deque = deque(maxlen=loop_m)
+    streak = 0
     exit_code = 0
     try:
         fh = open(filepath, "r", encoding="utf-8", errors="replace")
@@ -526,8 +531,11 @@ def replay_file(filepath: str, *, loop_n: int = LOOP_N, loop_m: int = LOOP_M, os
                 window.append(fp)
                 osc, _ = detect_oscillation(window, osc_n)
                 loop_hit, _ = detect_loop(window, loop_n)
-                verdict = "⚠ OSCILLATION" if osc else ("⚠ LOOP" if loop_hit else "ok")
-                if osc or loop_hit:
+                streak = update_repeat_streak(streak, ev)
+                repeat_hit = streak >= repeat_n
+                verdict = ("⚠ OSCILLATION" if osc else ("⚠ LOOP" if loop_hit
+                          else ("⚠ REPEAT_ERROR" if repeat_hit else "ok")))
+                if osc or loop_hit or repeat_hit:
                     exit_code = 1
                 print(f"{i:>4}  {ev['tool']:<24} {verdict}", flush=True)
     return exit_code
@@ -567,7 +575,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.command == "replay":
-        return replay_file(target)
+        return replay_file(target, repeat_n=args.repeat_n)
 
     return watch_file(
         target,
