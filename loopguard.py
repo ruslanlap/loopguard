@@ -257,24 +257,35 @@ def detect_fuzzy(window: deque, n: int) -> tuple[bool, str]:
     return False, ""
 
 
+def update_repeat_streak(streak: int, ev: dict) -> int:
+    """
+    Incremental REPEAT_ERROR streak update for one bash event.
+
+    A failed bash bumps the streak; a successful bash, a non-bash event or a
+    missing/invalid exit code resets it. bool exit codes don't count (bool is
+    an int subclass in Python). Used both by detect_repeat_error() and by the
+    live watch loop, where the streak must persist across poll ticks.
+    """
+    if ev.get("tool") == "bash":
+        code = ev.get("exit_code")
+        if isinstance(code, int) and not isinstance(code, bool) and code != 0:
+            return streak + 1
+    return 0
+
+
 def detect_repeat_error(events: list[dict], n: int = REPEAT_N) -> tuple[bool, int]:
     """
     REPEAT_ERROR: >= n consecutive bash events with non-zero exit code.
 
     Sticky streak, not a sliding window: any successful (or non-bash) event
-    resets the count. exit_code or return_code field, whichever the schema has.
+    resets the count. exit_code/return_code are normalised at parse time.
     Returns (detected, streak_len).
     """
     streak = 0
     for ev in events:
-        if ev.get("tool") == "bash":
-            code = ev.get("exit_code", ev.get("return_code"))
-            if isinstance(code, int) and code != 0:
-                streak += 1
-                if streak >= n:
-                    return True, streak
-            else:
-                streak = 0
+        streak = update_repeat_streak(streak, ev)
+        if streak >= n:
+            return True, streak
     return False, 0
 
 
@@ -382,18 +393,16 @@ def watch_file(
     incident_reported = False  # one alert per incident; reset on new unique call
     last_activity = time.monotonic()  # wall time of last new line
     stall_reported = False
+    bash_streak = 0  # consecutive failed bash — persists across poll ticks
 
     def _process_new_lines(file_handle) -> int:
         """Read new lines from current offset; update window; return 1 if incident."""
-        nonlocal incident_reported, last_activity, stall_reported
+        nonlocal incident_reported, last_activity, stall_reported, bash_streak
 
-        new_data = False
-        bash_events: list[dict] = []
         for raw in file_handle:
             raw = raw.strip()
             if not raw:
                 continue
-            new_data = True
             last_activity = time.monotonic()
             stall_reported = False  # reset stall on new activity
 
@@ -403,7 +412,6 @@ def watch_file(
                 else:
                     fp = None
 
-                bash_events.append(ev)  # raw events for REPEAT_ERROR streak
                 # A *new unique* tool call resets the incident flag
                 if fp is not None and incident_reported:
                     seen_fps = set(f for f in window if f is not None)
@@ -442,14 +450,13 @@ def watch_file(
                         if once:
                             return 1
 
-        if bash_events and not incident_reported:
-            rep_hit, streak = detect_repeat_error(bash_events, repeat_n)
-            if rep_hit:
-                alert("REPEAT_ERROR", f"bash failed {streak} times consecutively")
-                incident_reported = True
-                if once:
-                    return 1
-        # ponytail: new_data tracked for callers that may want it; unused now
+                # REPEAT_ERROR: incremental streak, survives across poll ticks
+                bash_streak = update_repeat_streak(bash_streak, ev)
+                if bash_streak >= repeat_n and not incident_reported:
+                    alert("REPEAT_ERROR", f"bash failed {bash_streak} times consecutively")
+                    incident_reported = True
+                    if once:
+                        return 1
         return 0
 
     # ── --once mode: read everything and exit ──────────────────────────────────

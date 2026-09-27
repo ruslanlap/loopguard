@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from collections import deque
 import unittest
@@ -360,6 +361,65 @@ class TestRepeatError(unittest.TestCase):
     def test_non_bash_ignored(self):
         events = [{"tool": "read_file", "args_hash": "a", "exit_code": 1}] * 3
         self.assertEqual(loopguard.detect_repeat_error(events, 3), (False, 0))
+
+
+class TestRepeatErrorAcrossTicks(unittest.TestCase):
+    """REPEAT_ERROR streak must persist across poll ticks in live-watch mode."""
+
+    def test_streak_accumulates_across_ticks(self):
+        # 3 failed bash events arriving one per poll tick must reach streak 3
+        streak = 0
+        for tick in range(3):
+            ev = {"tool": "bash", "args_hash": f"h{tick}", "exit_code": 1}
+            streak = loopguard.update_repeat_streak(streak, ev)
+        self.assertGreaterEqual(streak, 3)
+
+    def test_success_resets_persisted_streak(self):
+        streak = 0
+        for _ in range(2):
+            streak = loopguard.update_repeat_streak(streak, {"tool": "bash", "exit_code": 1})
+        streak = loopguard.update_repeat_streak(streak, {"tool": "bash", "exit_code": 0})
+        self.assertEqual(loopguard.update_repeat_streak(streak, {"tool": "bash", "exit_code": 1}), 1)
+
+    def test_bool_exit_code_not_counted_as_failure(self):
+        self.assertEqual(
+            loopguard.update_repeat_streak(2, {"tool": "bash", "exit_code": True}), 0
+        )
+
+    def test_live_watch_alerts_across_poll_ticks(self):
+        # Empirical repro from review: 3 failed bash events appended >2s apart
+        # in live watch mode must trigger REPEAT_ERROR.
+        import select
+
+        script = os.path.join(os.path.dirname(__file__), "..", "loopguard.py")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "live.jsonl"
+            p.write_text("", encoding="utf-8")
+            proc = subprocess.Popen(
+                [sys.executable, script, "watch", str(p), "--from-start"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            try:
+                for i in range(3):
+                    time.sleep(2.5)  # > POLL_INTERVAL: each line lands in its own tick
+                    with open(p, "a", encoding="utf-8") as fh:
+                        fh.write(json.dumps({
+                            "tool": "bash",
+                            "tool_input": {"cmd": f"false {i}"},
+                            "exit_code": 1,
+                        }) + "\n")
+                out = b""
+                deadline = time.time() + 15
+                while time.time() < deadline and b"REPEAT_ERROR" not in out:
+                    remaining = max(0.1, deadline - time.time())
+                    ready, _, _ = select.select([proc.stdout], [], [], remaining)
+                    if not ready:
+                        break
+                    out += proc.stdout.readline()
+                self.assertIn(b"REPEAT_ERROR", out)
+            finally:
+                proc.kill()
+                proc.wait()
 
 
 if __name__ == "__main__":
