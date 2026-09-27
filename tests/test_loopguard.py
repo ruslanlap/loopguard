@@ -386,6 +386,7 @@ class TestRepeatErrorAcrossTicks(unittest.TestCase):
             loopguard.update_repeat_streak(2, {"tool": "bash", "exit_code": True}), 0
         )
 
+    @unittest.skipIf(os.name == "nt", "select() on pipes unsupported on Windows")
     def test_live_watch_alerts_across_poll_ticks(self):
         # Empirical repro from review: 3 failed bash events appended >2s apart
         # in live watch mode must trigger REPEAT_ERROR.
