@@ -329,6 +329,39 @@ class TestFuzzyCLI(unittest.TestCase):
         self.assertEqual(run_once(fixture("clean.jsonl"), ["--fuzzy"]), 0)
 
 
+class TestRepeatError(unittest.TestCase):
+    """REPEAT_ERROR: same bash command failing >= N times consecutively."""
+
+    def test_three_consecutive_failures_detected(self):
+        code = run_once(fixture("repeat_error.jsonl"))
+        self.assertEqual(code, 1, "Expected exit 1 (REPEAT_ERROR) for repeat_error.jsonl")
+
+    def test_clean_no_repeat_error(self):
+        code = run_once(fixture("clean.jsonl"))
+        self.assertEqual(code, 0)
+
+    def test_success_resets_streak(self):
+        # 2 failures + 1 success = streak never reaches 3 → exit 0
+        code = run_once(fixture("repeat_error_reset.jsonl"))
+        self.assertEqual(code, 0)
+
+    def test_detect_repeat_error_unit(self):
+        events = [{"timestamp": None, "tool": "bash", "args_hash": f"h{i}", "exit_code": 1}
+                  for i in range(3)]
+        self.assertEqual(loopguard.detect_repeat_error(events, 3), (True, 3))
+        self.assertEqual(loopguard.detect_repeat_error(events[:2], 3), (False, 0))
+
+    def test_nonzero_exit_codes_count(self):
+        events = [{"tool": "bash", "args_hash": "a", "exit_code": 2},
+                  {"tool": "bash", "args_hash": "b", "exit_code": 127},
+                  {"tool": "bash", "args_hash": "c", "exit_code": 1}]
+        self.assertEqual(loopguard.detect_repeat_error(events, 3), (True, 3))
+
+    def test_non_bash_ignored(self):
+        events = [{"tool": "read_file", "args_hash": "a", "exit_code": 1}] * 3
+        self.assertEqual(loopguard.detect_repeat_error(events, 3), (False, 0))
+
+
 if __name__ == "__main__":
     unittest.main()
 

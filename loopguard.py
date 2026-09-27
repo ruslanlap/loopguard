@@ -28,6 +28,7 @@ from pathlib import Path
 # ── Defaults ──────────────────────────────────────────────────────────────────
 LOOP_N = 3        # how many repeats within window triggers LOOP
 LOOP_M = 20       # sliding window size (last M events)
+REPEAT_N = 3      # consecutive failed bash commands → REPEAT_ERROR
 STALL_S = 300     # seconds of no new lines → STALL
 POLL_INTERVAL = 2 # seconds between file polls (watch mode)
 
@@ -78,6 +79,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Window size for OSCILLATION detection (default: 4).",
     )
     watch.add_argument(
+        "--repeat-n",
+        type=int,
+        default=REPEAT_N,
+        metavar="N",
+        help=f"Consecutive failed bash commands before REPEAT_ERROR alert (default: {REPEAT_N}).",
+    )
+    watch.add_argument(
         "--stall-s",
         type=int,
         default=STALL_S,
@@ -122,6 +130,7 @@ def parse_events(raw_line: str) -> list[dict]:
         if not isinstance(obj, dict):
             return generic
         ts = obj.get("timestamp") or obj.get("ts")
+        exit_code = obj.get("exit_code", obj.get("return_code"))
 
         tool_name = None
         tool_args = None
@@ -158,13 +167,15 @@ def parse_events(raw_line: str) -> list[dict]:
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
                         ev = {"timestamp": ts, "tool": block.get("name"),
-                              "args_hash": _hash_args(block.get("input") or {})}
+                              "args_hash": _hash_args(block.get("input") or {}),
+                              "exit_code": exit_code}
                         events.append(ev)
                 if events:
                     return events
 
         if tool_name:
-            return [{"timestamp": ts, "tool": tool_name, "args_hash": _hash_args(tool_args)}]
+            return [{"timestamp": ts, "tool": tool_name, "args_hash": _hash_args(tool_args),
+                     "exit_code": exit_code}]
         return [{"timestamp": ts, "tool": None, "args_hash": None}]
     except (json.JSONDecodeError, TypeError, ValueError):
         return generic
@@ -244,6 +255,27 @@ def detect_fuzzy(window: deque, n: int) -> tuple[bool, str]:
         if counts[tool] >= n:
             return True, tool
     return False, ""
+
+
+def detect_repeat_error(events: list[dict], n: int = REPEAT_N) -> tuple[bool, int]:
+    """
+    REPEAT_ERROR: >= n consecutive bash events with non-zero exit code.
+
+    Sticky streak, not a sliding window: any successful (or non-bash) event
+    resets the count. exit_code or return_code field, whichever the schema has.
+    Returns (detected, streak_len).
+    """
+    streak = 0
+    for ev in events:
+        if ev.get("tool") == "bash":
+            code = ev.get("exit_code", ev.get("return_code"))
+            if isinstance(code, int) and code != 0:
+                streak += 1
+                if streak >= n:
+                    return True, streak
+            else:
+                streak = 0
+    return False, 0
 
 
 # ── Alerting ──────────────────────────────────────────────────────────────────
@@ -327,6 +359,7 @@ def watch_file(
     loop_m: int = LOOP_M,
     osc_n: int = 4,
     stall_s: int = STALL_S,
+    repeat_n: int = REPEAT_N,
     fuzzy: bool = False,
     fuzzy_n: int = 8,
 ) -> int:
@@ -355,6 +388,7 @@ def watch_file(
         nonlocal incident_reported, last_activity, stall_reported
 
         new_data = False
+        bash_events: list[dict] = []
         for raw in file_handle:
             raw = raw.strip()
             if not raw:
@@ -369,6 +403,7 @@ def watch_file(
                 else:
                     fp = None
 
+                bash_events.append(ev)  # raw events for REPEAT_ERROR streak
                 # A *new unique* tool call resets the incident flag
                 if fp is not None and incident_reported:
                     seen_fps = set(f for f in window if f is not None)
@@ -406,6 +441,14 @@ def watch_file(
                         incident_reported = True
                         if once:
                             return 1
+
+        if bash_events and not incident_reported:
+            rep_hit, streak = detect_repeat_error(bash_events, repeat_n)
+            if rep_hit:
+                alert("REPEAT_ERROR", f"bash failed {streak} times consecutively")
+                incident_reported = True
+                if once:
+                    return 1
         # ponytail: new_data tracked for callers that may want it; unused now
         return 0
 
@@ -527,6 +570,7 @@ def main(argv: list[str] | None = None) -> int:
         loop_m=args.loop_m,
         osc_n=args.osc_n,
         stall_s=args.stall_s,
+        repeat_n=args.repeat_n,
         fuzzy=getattr(args, "fuzzy", False),
         fuzzy_n=getattr(args, "fuzzy_n", 8),
     )
